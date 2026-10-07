@@ -35,6 +35,12 @@ async function openPage(browser, url) {
   return {page, dur};
 }
 
+function mux(video) {
+  return new Promise((res, rej) => spawn('ffmpeg', ['-y', '-loglevel', 'error', '-i', video, '-i', path.join(ROOT, 'out/soundtrack.wav'),
+    '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-af', 'loudnorm=I=-14:TP=-1.2:LRA=11', '-ar', '48000', '-c:a', 'aac', '-b:a', '256k',
+    '-shortest', '-movflags', '+faststart', OUT], {stdio: 'inherit'}).on('close', c => c ? rej(c) : res()));
+}
+
 async function main() {
   const srv = await serve();
   const url = `http://127.0.0.1:${srv.address().port}/video/index.html`;
@@ -50,7 +56,14 @@ async function main() {
     await browser.close(); srv.close(); return;
   }
 
-  const {page: probe, dur} = await openPage(browser, url); await probe.close();
+  const {page: probe, dur} = await openPage(browser, url);
+  // timeline cues drive the soundtrack, so the audio is generated from the same numbers as the picture
+  fs.mkdirSync(path.join(ROOT, 'out'), {recursive: true});
+  fs.writeFileSync(path.join(ROOT, 'out/cues.json'), JSON.stringify(await probe.evaluate(() => ({timing: window.TIMING, cues: window.CUES})), null, 1));
+  await probe.close();
+  await new Promise((res, rej) => spawn('python3', [path.join(ROOT, 'tools/soundtrack.py')], {stdio: 'inherit'}).on('close', c => c ? rej(new Error('soundtrack failed')) : res()));
+  const VIDEO_ONLY = path.join(ROOT, 'out/.video-only.mp4');
+  if (args['audio-only']) { if (fs.existsSync(VIDEO_ONLY)) await mux(VIDEO_ONLY); await browser.close(); srv.close(); return; }
   const total = Math.ceil(dur * FPS);
   const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'seis-'));
   console.log(`${total} frames @ ${FPS}fps (${dur.toFixed(2)}s), ${WORKERS} workers`);
@@ -80,8 +93,9 @@ async function main() {
   fs.writeFileSync(list, [...Array(WORKERS)].map((_, w) => path.join(tmp, `part-${w}.mp4`)).filter(fs.existsSync).map(p => `file '${p}'`).join('\n'));
   fs.mkdirSync(path.dirname(OUT), {recursive: true});
   await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list,
-    '-c', 'copy', '-movflags', '+faststart', OUT], {stdio: 'inherit'}).on('close', c => c ? rej(c) : res()));
+    '-c', 'copy', VIDEO_ONLY], {stdio: 'inherit'}).on('close', c => c ? rej(c) : res()));
   fs.rmSync(tmp, {recursive: true, force: true});
+  await mux(VIDEO_ONLY);
   await browser.close(); srv.close();
   console.log('wrote', OUT);
 }

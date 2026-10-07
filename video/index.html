@@ -71,10 +71,19 @@ body{font-family:'Inter',sans-serif;color:var(--black);-webkit-font-smoothing:an
 .handle{font-size:27px;color:var(--g500);font-weight:500}
 .seg{position:absolute;top:0;height:4px;border-radius:2px;background:var(--g200);overflow:hidden}
 .seg>div{position:absolute;inset:0;background:var(--mauve);transform-origin:left}
+
+/* v2 */
+#cam{position:absolute;inset:0;transform-origin:center}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+#wiper{position:absolute;top:0;left:0;width:1920px;height:1080px;background:var(--purple);transform:translate(2000px,0)}
+#wiper::before{content:'';position:absolute;left:0;top:0;bottom:0;width:30px;background:var(--mauve)}
+.hookw{position:absolute;left:0;right:0;top:0;height:1080px;display:flex;align-items:center;justify-content:center;
+  font-size:200px;font-weight:600;letter-spacing:-.045em;color:#fff;white-space:nowrap}
+.ghost{font-size:330px;font-weight:600;letter-spacing:-.06em;line-height:1;color:rgba(130,90,109,.07)}
 </style>
 </head>
 <body>
-<div id="stage"></div>
+<div id="stage"><div id="cam"></div><div id="wiper"></div><div id="flash"></div></div>
 <script>
 /* ---------- tiny deterministic timeline ---------- */
 const EASE = {
@@ -83,13 +92,17 @@ const EASE = {
   outQuart: p => 1 - Math.pow(1 - p, 4),
   outCubic: p => 1 - Math.pow(1 - p, 3),
   inCubic: p => p * p * p,
+  inQuart: p => p ** 4,
   inOutCubic: p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2,
   inOutQuart: p => p < .5 ? 8 * p ** 4 : 1 - Math.pow(-2 * p + 2, 4) / 2,
+  outBack: p => 1 + 2.4 * Math.pow(p - 1, 3) + 1.4 * Math.pow(p - 1, 2),
 };
 const DEF = {opacity:1,x:0,y:0,xp:0,yp:0,scale:1,sx:1,sy:1,rot:0,blur:0,ct:0,cr:0,cb:0,cl:0};
 const TRACKS = new Map();          // el -> {prop: [{start,dur,from,to,ease}]}
 const UPDATERS = [];               // fn(t)
 const SCENES = [];                 // {el,start,end}
+const CUES = [];                   // audio cues {t,k,v}
+const cue = (t, k, v = 0) => CUES.push({t: +t.toFixed(4), k, v});
 
 function tw(el, start, dur, props, ease = 'outExpo') {
   if (!el) return;
@@ -122,7 +135,7 @@ function seek(t) {
     if ('x' in m || 'y' in m || 'xp' in m || 'yp' in m || 'scale' in m || 'sx' in m || 'sy' in m || 'rot' in m) {
       st.transform = `translate(${v.x}px,${v.y}px) translate(${v.xp}%,${v.yp}%) scale(${v.scale * v.sx},${v.scale * v.sy}) rotate(${v.rot}deg)`;
     }
-    if ('blur' in m) st.filter = v.blur > 0.01 ? `blur(${v.blur}px)` : 'none';
+    if ('blur' in m) st.filter = v.blur > 0.05 ? `blur(${v.blur}px)` : 'none';
     if ('ct' in m || 'cr' in m || 'cb' in m || 'cl' in m) st.clipPath = `inset(${v.ct}% ${v.cr}% ${v.cb}% ${v.cl}%)`;
   }
   for (const f of UPDATERS) f(t);
@@ -130,7 +143,7 @@ function seek(t) {
 window.seek = seek;
 
 /* ---------- DOM helpers ---------- */
-const stage = document.getElementById('stage');
+const stage = document.getElementById('cam');
 function h(tag, cls, html, style) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -147,7 +160,7 @@ function scene(id, start, end, bg) {
   if (bg) el.style.background = bg;
   stage.appendChild(el); SCENES.push({el, start, end}); return el;
 }
-/* "words *accent* | newline" -> masked word spans; returns [container, innerSpans] */
+/* "words *accent* | newline" -> masked word spans */
 function words(text, cls) {
   const box = h('div', cls);
   const inner = [];
@@ -163,11 +176,40 @@ function words(text, cls) {
   });
   return [box, inner];
 }
-function rise(spans, start, stagger = .045, dur = .9) {
-  spans.forEach((s, i) => tw(s, start + i * stagger, dur, {yp: [110, 0]}, 'outExpo'));
+function rise(spans, start, stagger = .045, dur = .8) {
+  spans.forEach((s, i) => tw(s, start + i * stagger, dur, {yp: [110, 0], rot: [4, 0]}, 'outExpo'));
 }
-function sink(spans, start, stagger = .02, dur = .45) {
+function sink(spans, start, stagger = .02, dur = .3) {
   spans.forEach((s, i) => tw(s, start + i * stagger, dur, {yp: [0, -110]}, 'inCubic'));
+}
+function slam(el, start, from = 1.35, blur = 18, dur = .55) {
+  tw(el, start, dur, {scale: [from, 1], blur: [blur, 0], opacity: [0, 1]}, 'outExpo');
+}
+function reveal(el, start, dur = .4) { tw(el, start, dur, {ct: [100, 0]}, 'inOutQuart'); }
+
+/* camera shake + flash */
+const SHAKES = [];
+function impact(t, amp = 12, kind = 'impact') { SHAKES.push([t, amp]); cue(t, kind); }
+const flash = document.getElementById('flash');
+tw(flash, -1, .01, {opacity: [0, 0]});
+function flashAt(t, peak = .9, dur = .6) { tw(flash, t, .01, {opacity: [0, peak]}, 'linear'); tw(flash, t + .01, dur, {opacity: [peak, 0]}, 'outCubic'); }
+UPDATERS.push(t => {
+  let x = 0, y = 0, s = 0;
+  for (const [t0, a] of SHAKES) {
+    const d = t - t0; if (d < 0 || d > .6) continue;
+    const e = Math.exp(-d / .13) * a;
+    x += Math.sin(d * 97 + t0) * e; y += Math.cos(d * 83 + t0 * 3) * e * .7; s += Math.exp(-d / .2) * a * .0016;
+  }
+  stage.style.transform = `translate(${x}px,${y}px) scale(${1 + s})`;
+});
+
+/* wipe between slides */
+const wiper = document.getElementById('wiper');
+tw(wiper, -1, .01, {x: [2000, 2000]}, 'linear');
+function wipe(t) {   // panel fully covers the frame at t
+  tw(wiper, t - .3, .3, {x: [1960, 0]}, 'inCubic');
+  tw(wiper, t, .38, {x: [0, -1990]}, 'outCubic');
+  cue(t - .32, 'whoosh');
 }
 
 /* ---------- logos ---------- */
@@ -180,22 +222,20 @@ function logo(name, height, color) {
   return e;
 }
 function seismicLight(el) {
-  // Re-tone the facets for dark backgrounds while keeping their hierarchy.
   el.querySelectorAll('path').forEach(p => {
     const c = p.getAttribute('fill'); const r = parseInt(c.slice(1, 3), 16);
     p.setAttribute('fill', '#fff'); p.setAttribute('fill-opacity', (1.25 - r / 160).toFixed(2));
   });
   return el;
 }
-function assemble(el, start, spread = .55) {
+function assemble(el, start, spread = .55, stagger = .06, dur = .9) {
   const svg = el.querySelector('svg'); const vb = svg.viewBox.baseVal;
   const cx = vb.x + vb.width / 2, cy = vb.y + vb.height / 2;
   [...svg.querySelectorAll('path')].forEach((p, i) => {
     const b = p.getBBox(); const dx = (b.x + b.width / 2 - cx) * spread, dy = (b.y + b.height / 2 - cy) * spread;
-    tw(p, start + i * .09, 1.3, {x: [dx, 0], y: [dy, 0], rot: [(i % 2 ? 8 : -8), 0], opacity: [0, 1]}, 'outExpo');
+    tw(p, start + i * stagger, dur, {x: [dx, 0], y: [dy, 0], rot: [(i % 2 ? 14 : -14), 0], opacity: [0, 1], scale: [.6, 1]}, 'outExpo');
   });
 }
-// optical sizes for project slides (px); grid uses ~0.6x
 const OPT = {specie:86, promis:90, brookwell:146, via:84, prism:106, dashx:110, vend:92, avvio:94, pagga:94, blend:96, shift:62};
 function brandMark(name, hgt, color, wordSize) {
   if (name !== 'brookwell') return logo(name, hgt, color);
@@ -254,16 +294,51 @@ const P = [
 ];
 const N = P.length;
 
-/* ---------- timing ---------- */
-const S2_IN = 5.7, A0 = S2_IN + .55, ENC = A0 + 2.6, B0 = ENC + 3.3, S3_IN = B0 + 4.7, S4_IN = S3_IN + 4.7, SLOT = 4.5,
-  S5_IN = S4_IN + N * SLOT - 0.2, S5B_IN = S5_IN + 4.6;
-const END = S5B_IN + 6.2;
+/* ---------- timing: everything sits on a 120 BPM grid (beat = 0.5s, bar = 2s) ---------- */
+const BPM = 120, BEAT = 60 / BPM;
+const DROP = 4, WHY = 8, ENC = 10, PRIV = 12, MONEY = 14, GRID = 18, SLIDES = 22, SLOT = 4;
+const OUTRO = SLIDES + N * SLOT, FINAL = OUTRO + 4, END = FINAL + 6;
 window.DURATION = END;
+window.TIMING = {BPM, DROP, WHY, ENC, PRIV, MONEY, GRID, SLIDES, SLOT, N, OUTRO, FINAL, END};
+
+const GL = '░▒▓█#%&$@*+=/<>';
+const rnd = n => { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); };
+const scramble = (s, seed) => s.replace(/[^ →…]/g, (c, i) => GL[Math.floor(rnd(seed + i * 7.1) * GL.length)]);
 
 function build() {
-  /* ===== S1 · intro ===== */
-  const s1 = scene('s1', 0, S2_IN + .8);
+  /* ===== HOOK · 0–4s, fast kinetic cuts ===== */
+  const hk = scene('hook', 0, DROP, 'var(--purple)');
+  const hookIn = h('div', 'abs', null, {inset: 0}); hk.appendChild(hookIn);
+  ['Neobanks.', 'Payments.', 'Credit.', 'AI finance.'].forEach((w, i) => {
+    const e = h('div', 'hookw d', w); hookIn.appendChild(e);
+    const t = i * BEAT;
+    tw(e, -1, .01, {opacity: [0, 0]}, 'linear');
+    tw(e, t, .35, {opacity: [0, 1], scale: [1.5, 1], blur: [24, 0]}, 'outExpo');
+    tw(e, t + BEAT - .001, .001, {opacity: [1, 0]}, 'linear');
+    cue(t, 'hit', i);
+  });
+  const [hl1, hl1w] = words('All with customer data', 'd');
+  Object.assign(hl1.style, {width: '1920px', textAlign: 'center', fontSize: '96px', fontWeight: 500, letterSpacing: '-.035em', color: 'rgba(255,255,255,.62)'});
+  put(hookIn, hl1, 0, 352);
+  const priv = h('div', 'd', 'kept private.', {width: '1920px', textAlign: 'center', fontSize: '190px', fontWeight: 600, letterSpacing: '-.045em', color: '#fff'});
+  put(hookIn, priv, 0, 470);
+  rise(hl1w, 2.0, .125, .6);
+  hl1w.forEach((s, i) => cue(2.0 + i * .125, 'tick', i));
+  slam(priv, 3.0, 1.25, 20, .5);
+  cue(3.0, 'glitch', .5);
+  UPDATERS.push(t => {
+    const p = (t - 3.0) / .55; const txt = 'kept private.';
+    if (p <= 0 || p >= 1) { priv.textContent = txt; return; }
+    const k = Math.floor(p * txt.length);
+    priv.textContent = txt.slice(0, k) + scramble(txt.slice(k), Math.floor(t * 60));
+  });
+  tw(hookIn, DROP - .3, .3, {scale: [1, 1.35], blur: [0, 14], opacity: [1, 0]}, 'inCubic');
+  cue(DROP - 2, 'riser', 2);
+
+  /* ===== DROP · 4–8s, the title ===== */
+  const s1 = scene('s1', DROP, WHY + .5);
   const s1g = h('div', 'abs', null, {left: 0, top: 0, width: '1920px', height: '1080px'}); s1.appendChild(s1g);
+  impact(DROP, 16, 'drop'); flashAt(DROP, 1, .7);
   const L1H = 300;
   const s1logo = logo('seismic', L1H); s1g.appendChild(s1logo); s1logo.classList.add('abs');
   const s1text = h('div', 'abs'); s1g.appendChild(s1text);
@@ -273,43 +348,45 @@ function build() {
   const chipEls = ['Neobanks', 'Payments', 'Credit', 'AI finance'].map(c => {
     const p = h('div', 'pill', `<span class="dot"></span>${c}`); chips.appendChild(p); return p;
   });
-  const priv = h('div', 'pill solid', `<span class="dot"></span>Customer data kept private`); chips.appendChild(priv);
+  const privChip = h('div', 'pill solid', `<span class="dot"></span>Customer data kept private`); chips.appendChild(privChip);
   s1text.append(title, sub, chips);
-  // layout: logo + text group centred
   const lw = L1H * 208 / 308, fs = .72, gap = 80;
   const textW = s1text.offsetWidth, textH = s1text.offsetHeight;
   const groupW = lw * fs + gap + textW, gx = (1920 - groupW) / 2;
   s1logo.style.left = (960 - lw / 2) + 'px'; s1logo.style.top = (540 - L1H / 2) + 'px';
   s1text.style.left = (gx + lw * fs + gap) + 'px'; s1text.style.top = (540 - textH / 2) + 'px';
-  assemble(s1logo, .15);
+  assemble(s1logo, DROP, 1.1, .04, .8);
+  tw(s1logo, DROP, .8, {scale: [1.25, 1]}, 'outExpo');
   const dx = gx + lw * fs / 2 - 960;
-  tw(s1logo, 1.75, 1.0, {x: [0, dx], scale: [1, fs]}, 'inOutQuart');
-  rise(tw1, 2.15, .05, 1.0);
-  rise(tw2, 2.75, .02, .9);
-  chipEls.concat(priv).forEach((c, i) => tw(c, 3.3 + i * .09 + (c === priv ? .25 : 0), .8, {opacity: [0, 1], y: [24, 0]}, 'outExpo'));
-  tw(s1g, S2_IN, .9, {y: [0, -140], opacity: [1, .3]}, 'inOutCubic');
+  tw(s1logo, DROP + 1, .6, {x: [0, dx], scale: [1, fs]}, 'inOutQuart');
+  cue(DROP + 1, 'swish');
+  rise(tw1, DROP + 1.25, .0625, .8);
+  rise(tw2, DROP + 1.9, .02, .7);
+  chipEls.concat(privChip).forEach((c, i) => {
+    const t = DROP + 2.5 + i * .125 + (c === privChip ? .25 : 0);
+    tw(c, t, .6, {opacity: [0, 1], y: [30, 0], scale: [.85, 1]}, 'outBack'); cue(t, 'pop', i);
+  });
+  tw(s1g, WHY - .35, .45, {y: [0, -160], opacity: [1, .2]}, 'inCubic');
 
-  /* ===== S2 · why seismic ===== */
-  const s2 = scene('s2', S2_IN, S3_IN + .8);
-  tw(s2, S2_IN, .8, {ct: [100, 0]}, 'inOutQuart');
+  /* ===== WHY · 8–18s ===== */
+  const s2 = scene('s2', WHY - .35, GRID + .2);
+  reveal(s2, WHY - .35); cue(WHY - .4, 'whoosh');
   const s2a = h('div', 'abs', null, {inset: 0}); s2.appendChild(s2a);
   const eb = put(s2a, h('div', 'eyebrow', 'Why Seismic', {color: 'rgba(255,255,255,.55)'}), 150, 300);
   const [ha, haw] = words('Stablecoin rails are|fast and cheap.', 'd s2h'); put(s2a, ha, 150, 356);
   const [hb, hbw] = words('But public chains expose|every balance and payment.', 'd s2h'); put(s2a, hb, 150, 530);
   hb.style.color = 'rgba(255,255,255,.42)';
   const [hc, hcw] = words('Seismic keeps customer|data private.', 'd s2h'); put(s2a, hc, 150, 530);
-  tw(eb, A0, .8, {opacity: [0, 1], y: [16, 0]});
-  rise(haw, A0 + .1, .05); rise(hbw, A0 + .9, .04);
-  sink(hbw, ENC + .9, .015, .4); rise(hcw, ENC + 1.25, .05);
-  hcw.forEach(s => s.style.transform = 'translate(0,110%)');
+  tw(eb, WHY, .6, {opacity: [0, 1], y: [16, 0]});
+  rise(haw, WHY + .05, .06); rise(hbw, WHY + 1.0, .06);
+  sink(hbw, PRIV - .3, .015, .25); rise(hcw, PRIV, .05, .7);
 
-  // ledger
   const led = h('div', 'ledger'); s2a.appendChild(led);
   const lh = h('div', 'ledger-h');
   const lblPub = h('div', 'lbl', '<span class="live"></span>Public ledger');
   const lblPriv = h('div', 'lbl', '<svg width="16" height="18" viewBox="0 0 16 18"><rect x="1" y="8" width="14" height="10" rx="2" fill="#fff"/><path d="M4 8V5.5a4 4 0 0 1 8 0V8" stroke="#fff" stroke-width="2" fill="none"/></svg>Shielded on Seismic');
   lblPriv.style.color = '#fff';
-  lh.append(lblPub, lblPriv, h('div', '', 'USD₮ · USDC', {marginLeft: 'auto', position: 'absolute', right: 0, top: 0}));
+  lh.append(lblPub, lblPriv, h('div', '', 'USD₮ · USDC', {position: 'absolute', right: 0, top: 0}));
   led.appendChild(lh);
   const TX = [
     ['0x7a3f…91c2','0x19be…4d07','$12,480.00'], ['0x2c90…e1a4','0xf03d…7b18','$3,215.50'],
@@ -323,56 +400,53 @@ function build() {
     return {r, ad, am, a: `${a}  →  ${b}`, amt};
   });
   const scan = h('div', 'scan'); led.appendChild(scan);
-  tw(led, A0 + .3, 1.1, {opacity: [0, 1], y: [40, 0]}, 'outExpo');
-  rowEls.forEach((o, i) => tw(o.r, A0 + .5 + i * .07, .9, {opacity: [0, 1], x: [30, 0]}, 'outExpo'));
-  tw(lblPriv, ENC + .9, .5, {opacity: [0, 1], y: [14, 0]}); tw(lblPub, ENC + .6, .4, {opacity: [1, 0], y: [0, -14]}, 'inCubic');
-  lblPriv.style.opacity = 0;
-  // scramble
-  const GL = '░▒▓█#%&$@*+=/<>';
-  const rnd = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); };
-  const mask = s => s.replace(/[0-9a-f]/gi, (c, i) => i < 2 ? c : '•').replace(/0x••/g, '0x••');
-  const scramble = (s, seed) => s.replace(/[^ →…]/g, (c, i) => GL[Math.floor(rnd(seed + i * 7.1) * GL.length)]);
-  const ROW0 = 46 + 34 + 22, ROWH = 77, SW = 1.25;
+  tw(led, WHY + .25, .8, {opacity: [0, 1], y: [60, 0], scale: [.94, 1]}, 'outExpo');
+  rowEls.forEach((o, i) => { const t = WHY + .5 + i * .125; tw(o.r, t, .6, {opacity: [0, 1], x: [40, 0]}, 'outExpo'); cue(t, 'tick', i); });
+  // amounts pulse while "exposed"
+  rowEls.forEach((o, i) => tw(o.am, WHY + 1.5 + i * .125, .5, {scale: [1.25, 1]}, 'outExpo'));
+  tw(lblPriv, ENC + .9, .4, {opacity: [0, 1], y: [14, 0]}); tw(lblPub, ENC + .7, .3, {opacity: [1, 0], y: [0, -14]}, 'inCubic');
+  const mask = s => s.replace(/0x[0-9a-f]+…[0-9a-f]+/gi, '0x••••…••••');
+  const ROW0 = 46 + 34 + 22, ROWH = 77, SW = 1.0;
+  cue(ENC, 'glitch', SW + .3); cue(ENC - 1, 'riser', 1);
   UPDATERS.push(t => {
-    const sp = (t - ENC) / SW;                       // scan progress 0..1
+    const sp = (t - ENC) / SW;
     scan.style.opacity = (sp > 0 && sp < 1.05) ? 1 : 0;
     scan.style.top = (ROW0 + sp * ROWH * TX.length) + 'px';
     rowEls.forEach((o, i) => {
-      const rowT = ENC + SW * (i + .5) / TX.length;  // when the scan passes this row
-      const lt = t - rowT, f = Math.floor(t * 30);
+      const lt = t - (ENC + SW * (i + .5) / TX.length), f = Math.floor(t * 30);
       if (lt < 0) { o.ad.textContent = o.a; o.am.textContent = o.amt; o.am.style.opacity = 1; }
-      else if (lt < .45) { o.ad.textContent = scramble(o.a, f + i * 31); o.am.textContent = scramble(o.amt, f * 3 + i); }
-      else { o.ad.textContent = mask(o.a).replace(/0x(•+)/g, '0x••••'); o.am.textContent = '$ ••••••'; o.am.style.opacity = .85; }
+      else if (lt < .3) { o.ad.textContent = scramble(o.a, f + i * 31); o.am.textContent = scramble(o.amt, f * 3 + i); }
+      else { o.ad.textContent = mask(o.a); o.am.textContent = '$ ••••••'; o.am.style.opacity = .85; }
     });
   });
-  tw(s2a, B0, .55, {opacity: [1, 0], y: [0, -50]}, 'inCubic');
+  impact(PRIV, 9, 'impact');
+  tw(led, PRIV, .5, {scale: [1.04, 1]}, 'outExpo');
+  tw(s2a, MONEY - .3, .3, {opacity: [1, 0], y: [0, -60], blur: [0, 8]}, 'inCubic');
 
-  // phase B: $17M + capabilities
   const s2b = h('div', 'abs', null, {inset: 0}); s2.appendChild(s2b);
-  const big = put(s2b, h('div', 'd', '$17M', {fontSize: '280px', fontWeight: 500, letterSpacing: '-.05em', lineHeight: 1}), 150, 330);
-  const bigL = put(s2b, h('div', '', 'Raised, led by <b style="color:#fff;font-weight:600">a16z crypto</b>', {fontSize: '32px', color: 'rgba(255,255,255,.62)'}), 166, 640);
+  const big = put(s2b, h('div', 'd', '$17M', {fontSize: '300px', fontWeight: 600, letterSpacing: '-.055em', lineHeight: 1, transformOrigin: 'left center'}), 140, 320);
+  const bigL = put(s2b, h('div', '', 'Raised, led by <b style="color:#fff;font-weight:600">a16z crypto</b>', {fontSize: '34px', color: 'rgba(255,255,255,.62)'}), 158, 650);
   const ebB = put(s2b, h('div', 'eyebrow', 'The full stablecoin stack', {color: 'rgba(255,255,255,.55)'}), 1000, 250);
   const caps = h('div', 'abs', null, {left: '1000px', top: '300px', width: '770px'}); s2b.appendChild(caps);
   const capEls = ['Virtual accounts', 'Global payouts', 'Cards', 'Compliance', 'Yield'].map((c, i) => {
     const e = h('div', 'cap', `<i>0${i + 1}</i>${c}`); caps.appendChild(e); return e;
   });
   const tail = put(s2b, h('div', '', 'Without leaking customer data.', {fontSize: '30px', color: 'rgba(255,255,255,.62)'}), 1000, 770);
-  const B1 = B0 + .45;
-  tw(big, B1, 1.0, {opacity: [0, 1], y: [40, 0]}); tw(bigL, B1 + .3, .9, {opacity: [0, 1], y: [20, 0]});
-  UPDATERS.push(t => { const p = prog(t, B1, 1.4, 'outCubic'); big.textContent = '$' + Math.round(17 * p) + 'M'; });
-  tw(ebB, B1 + .2, .8, {opacity: [0, 1]});
-  capEls.forEach((c, i) => tw(c, B1 + .3 + i * .1, .9, {opacity: [0, 1], x: [40, 0]}));
-  tw(tail, B1 + 1.0, .9, {opacity: [0, 1], y: [16, 0]});
-  tw(s2b, S3_IN, .9, {y: [0, -140], opacity: [1, .3]}, 'inOutCubic');
+  slam(big, MONEY, 1.5, 24, .6); impact(MONEY, 13, 'impact');
+  tw(bigL, MONEY + .25, .6, {opacity: [0, 1], y: [20, 0]});
+  UPDATERS.push(t => { const p = prog(t, MONEY, .7, 'outCubic'); big.textContent = '$' + Math.round(17 * p) + 'M'; });
+  tw(ebB, MONEY + .25, .6, {opacity: [0, 1]});
+  capEls.forEach((c, i) => { const t = MONEY + .5 + i * BEAT; tw(c, t, .6, {opacity: [0, 1], x: [60, 0]}, 'outExpo'); cue(t, 'tick', i + 2); });
+  tw(tail, MONEY + 3, .6, {opacity: [0, 1], y: [16, 0]});
+  tw(s2b, GRID - .35, .45, {y: [0, -160], opacity: [1, .2]}, 'inCubic');
 
-  /* ===== S3 · grid ===== */
-  const s3 = scene('s3', S3_IN, S4_IN + .6, 'var(--g50)');
-  tw(s3, S3_IN, .8, {ct: [100, 0]}, 'inOutQuart');
-  const G0 = S3_IN + .5;
+  /* ===== GRID · 18–22s ===== */
+  const s3 = scene('s3', GRID - .35, SLIDES, 'var(--g50)');
+  reveal(s3, GRID - .35); cue(GRID - .4, 'whoosh');
   const eb3 = put(s3, h('div', 'eyebrow', 'The ecosystem', {color: 'var(--g500)'}), 210, 140);
   const [h3, h3w] = words('11 teams building on *Seismic.*', 'd'); put(s3, h3, 210, 178);
   Object.assign(h3.style, {fontSize: '64px', fontWeight: 500, letterSpacing: '-.03em', lineHeight: 1.05});
-  tw(eb3, G0, .8, {opacity: [0, 1], y: [14, 0]}); rise(h3w, G0 + .05, .05);
+  tw(eb3, GRID, .6, {opacity: [0, 1], y: [14, 0]}); rise(h3w, GRID + .05, .06);
   const tiles = [];
   [...P.map(p => p.k), 'seismic'].forEach((k, i) => {
     const c = i % 4, r = Math.floor(i / 4);
@@ -381,18 +455,18 @@ function build() {
       t.appendChild(seismicLight(logo('seismic', 74)));
       t.appendChild(h('div', 'd', 'Seismic', {fontSize: '34px', fontWeight: 600, letterSpacing: '-.03em'}));
     } else {
-      const lg = brandMark(k, Math.round(OPT[k] * (k === 'brookwell' ? .5 : .62)), 'var(--black)', 30);
-      t.appendChild(lg);
+      t.appendChild(brandMark(k, Math.round(OPT[k] * (k === 'brookwell' ? .5 : .62)), 'var(--black)', 30));
     }
     tiles.push(t);
-    tw(t, G0 + .35 + i * .065, 1.0, {opacity: [0, 1], y: [36, 0], scale: [.96, 1]}, 'outExpo');
-    tw(t, S4_IN - .55 + i * .025, .4, {opacity: [1, 0], y: [0, -24]}, 'inCubic');
+    const ti = GRID + .5 + i * .125;
+    tw(t, ti, .55, {opacity: [0, 1], y: [50, 0], scale: [.7, 1]}, 'outBack'); cue(ti, 'pop', i);
   });
-  tw([eb3, h3], S4_IN - .6, .4, {opacity: [1, 0], y: [0, -20]}, 'inCubic');
+  // the Seismic tile lands last, on the downbeat, with a hit
+  impact(GRID + 2, 6, 'hit');
+  tiles.forEach((t, i) => tw(t, GRID + 2 + Math.abs((i % 4) - 1.5) * .04 + Math.floor(i / 4) * .04, .5, {scale: [1.06, 1]}, 'outExpo'));
 
-  /* ===== S4 · projects ===== */
-  const s4 = scene('s4', S4_IN - .05, S5_IN + .8, 'var(--g50)');
-  // chrome
+  /* ===== SLIDES · 22–66s ===== */
+  const s4 = scene('s4', SLIDES, OUTRO, 'var(--g50)');
   const chrome = h('div', 'abs', null, {inset: 0}); s4.appendChild(chrome);
   const cl = put(chrome, h('div', '', null, {display: 'flex', alignItems: 'center', gap: '14px', fontSize: '20px', fontWeight: 600, color: 'var(--g800)', letterSpacing: '-.01em'}), 120, 70);
   cl.append(logo('seismic', 36), h('span', '', 'Building on Seismic'));
@@ -402,81 +476,92 @@ function build() {
   const segW = (1680 - (N - 1) * 10) / N;
   P.forEach((p, i) => {
     const sg = h('div', 'seg', '<div></div>', {left: i * (segW + 10) + 'px', width: segW + 'px'}); segs.appendChild(sg);
-    tw(sg.firstChild, S4_IN + i * SLOT, SLOT, {sx: [0, 1]}, 'linear');
+    tw(sg.firstChild, SLIDES + i * SLOT, SLOT, {sx: [0, 1]}, 'linear');
   });
-  tw([cl, cr], S4_IN + .1, .8, {opacity: [0, 1], y: [-14, 0]});
-  tw(divider, S4_IN + .2, 1.2, {sy: [0, 1]}, 'outExpo');
-  tw(segs, S4_IN + .2, .8, {opacity: [0, 1]});
+  tw(divider, SLIDES + .1, .9, {sy: [0, 1]}, 'outExpo');
 
   P.forEach((p, i) => {
-    const t0 = S4_IN + i * SLOT, tx = t0 + SLOT - .45;
+    const t0 = SLIDES + i * SLOT;
+    wipe(t0);
+    const grp = h('div', 'abs', null, {inset: 0, transformOrigin: '50% 50%'}); s4.appendChild(grp);
     const left = h('div', 'abs', null, {left: '120px', top: '0', width: '660px', height: '1080px'});
     const right = h('div', 'abs', null, {left: '910px', top: '0', width: '900px', height: '1080px'});
-    s4.append(left, right);
-    // left column
+    grp.append(left, right);
+    const ghost = put(left, h('div', 'd ghost', String(i + 1).padStart(2, '0')), -16, 636);
     const ix = put(left, h('div', 'idx', `${String(i + 1).padStart(2, '0')} / ${N}`), 0, 250);
     const tag = put(left, h('div', 'pill', `<span class="dot"></span>${p.tag}`), 0, 304);
-    const lbox = put(left, h('div', '', null, {overflow: 'hidden', paddingBottom: '6px'}), 0, 440);
+    const lbox = put(left, h('div', '', null, {paddingBottom: '6px'}), 0, 440);
     const lg = brandMark(p.k, OPT[p.k], 'var(--black)', 64); lbox.appendChild(lg);
+    lg.style.transformOrigin = 'left center';
     if (lg.offsetWidth > 600) lg.style.height = OPT[p.k] * 600 / lg.offsetWidth + 'px';
     const meta = put(left, h('div', '', null, {display: 'flex', alignItems: 'center', gap: '18px'}), 0, 440 + OPT[p.k] + 48);
     if (p.handle) meta.appendChild(h('div', 'handle', p.handle));
     if (p.status) meta.appendChild(h('div', 'pill solid', `<span class="dot"></span>${p.status}`, {height: '42px', fontSize: '19px'}));
-    // right column
     const [hl, hlw] = words(p.hl, 'd hl'); put(right, hl, 0, 236);
     const rows = h('div', 'abs', null, {left: 0, top: '462px', width: '900px'}); right.appendChild(rows);
     const rowEls = p.rows.map(([t, x], j) => {
       const r = h('div', 'prow', `<div class="ln"></div><div class="n">0${j + 1}</div><div class="t">${t}</div><div class="x">${x}</div>`);
       rows.appendChild(r); return r;
     });
-    // in
-    tw(ix, t0 + .05, .7, {opacity: [0, 1], y: [16, 0]});
-    tw(tag, t0 + .12, .8, {opacity: [0, 1], y: [20, 0]});
-    tw(lg, t0 + .18, 1.0, {yp: [105, 0]}, 'outExpo');
-    tw(meta, t0 + .4, .8, {opacity: [0, 1], y: [16, 0]});
-    rise(hlw, t0 + .15, .035, .95);
+    // beat 1: logo slams in under the wipe
+    slam(lg, t0 + .02, 1.45, 20, .6); cue(t0, 'hit', i);
+    tw(ghost, t0, 1.2, {y: [160, 0], opacity: [0, 1]}, 'outExpo');
+    tw(ix, t0 + .05, .5, {opacity: [0, 1], y: [16, 0]});
+    tw(tag, t0 + .1, .5, {opacity: [0, 1], x: [-30, 0]});
+    tw(meta, t0 + .35, .5, {opacity: [0, 1], y: [16, 0]});
+    // beat 2: headline
+    rise(hlw, t0 + BEAT * .5, .04, .7);
+    // beats 3–5: one row per beat
     rowEls.forEach((r, j) => {
-      tw(r.querySelector('.ln'), t0 + .4 + j * .1, 1.1, {sx: [0, 1]}, 'outExpo');
-      tw([...r.children].slice(1), t0 + .5 + j * .1, .9, {opacity: [0, 1], y: [22, 0]}, 'outExpo');
+      const tr = t0 + BEAT * (2 + j);
+      tw(r.querySelector('.ln'), tr - .05, .7, {sx: [0, 1]}, 'outExpo');
+      tw([...r.children].slice(1), tr, .55, {opacity: [0, 1], x: [50, 0]}, 'outExpo');
+      tw(r.querySelector('.t'), tr, .45, {scale: [1.08, 1]}, 'outExpo');
+      cue(tr, 'tick', j);
     });
-    // out
-    tw(left, tx, .42, {opacity: [1, 0], y: [0, -28]}, 'inCubic');
-    tw(right, tx + .04, .42, {opacity: [1, 0], y: [0, -28]}, 'inCubic');
-    // only render while active (keeps per-frame work small)
-    SCENES.push({el: left, start: t0, end: t0 + SLOT}, {el: right, start: t0, end: t0 + SLOT});
+    // slow camera push for the whole slide
+    tw(grp, t0, SLOT, {scale: [1, 1.035]}, 'linear');
+    SCENES.push({el: grp, start: t0, end: t0 + SLOT});
   });
 
-  /* ===== S5 · outro ===== */
-  const s5a = scene('s5a', S5_IN, S5B_IN + .9);
-  tw(s5a, S5_IN, .8, {ct: [100, 0]}, 'inOutQuart');
-  const O0 = S5_IN + .55;
-  const [o1, o1w] = words('11 teams. One pattern.', 'd'); put(s5a, o1, 0, 360);
-  Object.assign(o1.style, {width: '1920px', textAlign: 'center', fontSize: '120px', fontWeight: 500, letterSpacing: '-.04em'});
-  const [o2, o2w] = words('Real financial products on stablecoin rails,|with privacy by default.', 'd'); put(s5a, o2, 0, 560);
-  Object.assign(o2.style, {width: '1920px', textAlign: 'center', fontSize: '50px', fontWeight: 500, letterSpacing: '-.025em', lineHeight: 1.15, color: 'rgba(255,255,255,.62)'});
-  rise(o1w, O0, .07, 1.0); rise(o2w, O0 + 1.0, .03, .95);
-  const s5aIn = h('div', 'abs', null, {inset: 0}); s5a.appendChild(s5aIn); s5aIn.append(o1, o2);
-  tw(s5aIn, S5B_IN, .9, {y: [0, -140], opacity: [1, .3]}, 'inOutCubic');
+  /* ===== OUTRO · 66–70s ===== */
+  wipe(OUTRO);
+  const s5a = scene('s5a', OUTRO, FINAL + .1);
+  const o1 = h('div', 'd', '11 teams.', {width: '1920px', textAlign: 'center', fontSize: '210px', fontWeight: 600, letterSpacing: '-.05em', lineHeight: 1});
+  const o2 = h('div', 'd', 'One pattern.', {width: '1920px', textAlign: 'center', fontSize: '210px', fontWeight: 600, letterSpacing: '-.05em', lineHeight: 1});
+  put(s5a, o1, 0, 230); put(s5a, o2, 0, 450);
+  slam(o1, OUTRO + .02, 1.6, 26, .6); impact(OUTRO, 14, 'impact');
+  slam(o2, OUTRO + 1, 1.6, 26, .6); impact(OUTRO + 1, 14, 'impact');
+  const [o3, o3w] = words('Real financial products on stablecoin rails, with privacy by default.', 'd');
+  Object.assign(o3.style, {width: '1920px', textAlign: 'center', fontSize: '44px', fontWeight: 500, letterSpacing: '-.02em', color: 'rgba(255,255,255,.62)'});
+  put(s5a, o3, 0, 760);
+  rise(o3w, OUTRO + 2, .0625, .6);
+  tw([o1, o2, o3], FINAL - .3, .3, {scale: [1, 1.25], blur: [0, 12], opacity: [1, 0]}, 'inCubic');
+  cue(FINAL - 2, 'riser', 2);
 
-  const s5b = scene('s5b', S5B_IN, END + 1, 'var(--g50)');
-  tw(s5b, S5B_IN, .8, {ct: [100, 0]}, 'inOutQuart');
-  const F0 = S5B_IN + .5;
+  /* ===== FINAL · 70–76s ===== */
+  const s5b = scene('s5b', FINAL - .3, END + 1, 'var(--g50)');
+  reveal(s5b, FINAL - .3, .3);
+  impact(FINAL, 16, 'final'); flashAt(FINAL, .85, .8);
   const flogo = logo('seismic', 230); put(s5b, flogo, 960 - 230 * 208 / 308 / 2, 190);
-  assemble(flogo, F0, .5);
+  assemble(flogo, FINAL, 1.1, .04, .9);
+  tw(flogo, FINAL, 1, {scale: [1.3, 1]}, 'outExpo');
   const [f1, f1w] = words('That’s the bet *@SeismicSys* is making.', 'd'); put(s5b, f1, 0, 486);
   Object.assign(f1.style, {width: '1920px', textAlign: 'center', fontSize: '64px', fontWeight: 500, letterSpacing: '-.03em'});
   const [f2, f2w] = words('And the ecosystem is already shipping.', ''); put(s5b, f2, 0, 576);
   Object.assign(f2.style, {width: '1920px', textAlign: 'center', fontSize: '32px', color: 'var(--g500)'});
-  rise(f1w, F0 + .6, .05); rise(f2w, F0 + 1.0, .03);
+  rise(f1w, FINAL + .5, .0625); rise(f2w, FINAL + 1, .04);
   const strip = h('div', 'abs', null, {left: 0, top: '800px', width: '1920px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '40px'});
   s5b.appendChild(strip);
-  const stripEls = P.map(p => {
+  P.forEach((p, i) => {
     const lg = brandMark(p.k, Math.round(OPT[p.k] * (p.k === 'brookwell' ? .24 : .34)), 'var(--g400)', 20);
-    strip.appendChild(lg); return lg;
+    strip.appendChild(lg);
+    const t = FINAL + 1.5 + i * .125;
+    tw(lg, t, .5, {opacity: [0, 1], y: [24, 0], scale: [.8, 1]}, 'outBack'); cue(t, 'pop', i);
   });
-  stripEls.forEach((e, i) => tw(e, F0 + 1.5 + i * .06, .9, {opacity: [0, 1], y: [16, 0]}));
   const rule = put(s5b, h('div', '', null, {width: '1680px', height: '1px', background: 'var(--g200)', transformOrigin: 'center'}), 120, 740);
-  tw(rule, F0 + 1.3, 1.2, {sx: [0, 1]});
+  tw(rule, FINAL + 1.25, 1, {sx: [0, 1]});
+  tw(s5b, END - .6, .6, {opacity: [1, 1]}, 'linear');
 }
 
 /* ---------- boot ---------- */
@@ -485,10 +570,9 @@ window.ready = (async () => {
   await document.fonts.load('500 64px "Inter Display"'); await document.fonts.load('600 64px "Inter Display"');
   await document.fonts.load('400 30px Inter'); await document.fonts.load('600 30px Inter');
   await document.fonts.ready;
-  // measure/layout needs everything visible during build
-  SCENES.length = 0;
   build();
-  // show all scenes once so getBBox/offsetWidth work, then seek
+  CUES.sort((a, b) => a.t - b.t);
+  window.CUES = CUES;
   seek(Number(new URLSearchParams(location.search).get('t') || 0));
   return END;
 })();

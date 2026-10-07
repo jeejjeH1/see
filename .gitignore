@@ -1,3 +1,6 @@
 out/stills/
+out/.video-only.mp4
+out/cues.json
+out/soundtrack.wav
 __pycache__/
 node_modules/
