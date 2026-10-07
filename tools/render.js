@@ -37,7 +37,12 @@ async function openPage(browser, url) {
 
 function mux(video) {
   return new Promise((res, rej) => spawn('ffmpeg', ['-y', '-loglevel', 'error', '-i', video, '-i', path.join(ROOT, 'out/soundtrack.wav'),
-    '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-af', 'loudnorm=I=-14:TP=-1.2:LRA=11', '-ar', '48000', '-c:a', 'aac', '-b:a', '256k',
+    // Final encode follows X/Twitter's upload constraints: H.264 High@4.2 (Level 5 gets "media could not be
+    // processed"), CFR, yuv420p, closed 2s GOPs, capped bitrate, AAC-LC stereo.
+    '-map', '0:v', '-map', '1:a', '-c:v', 'libx264', '-preset', 'slow', '-crf', '17', '-profile:v', 'high', '-level:v', '4.2',
+    '-pix_fmt', 'yuv420p', '-r', String(FPS), '-g', String(FPS * 2), '-keyint_min', String(FPS), '-sc_threshold', '0', '-bf', '2',
+    '-maxrate', '16M', '-bufsize', '32M', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',
+    '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-c:a', 'aac', '-profile:a', 'aac_low', '-b:a', '160k', '-ar', '48000', '-ac', '2',
     '-shortest', '-movflags', '+faststart', OUT], {stdio: 'inherit'}).on('close', c => c ? rej(c) : res()));
 }
 

@@ -2,7 +2,9 @@
 
 A 16:9 (1920×1080, 60 fps, H.264 + AAC stereo) motion graphic for an X/Twitter post about the 11 fintechs building on [@SeismicSys](https://x.com/SeismicSys).
 
-**Final video:** [`out/seismic-ecosystem.mp4`](out/seismic-ecosystem.mp4)
+**Final video:** [`out/seismic-ecosystem.mp4`](out/seismic-ecosystem.mp4) (1080p60). Fallback: [`out/seismic-ecosystem-30fps.mp4`](out/seismic-ecosystem-30fps.mp4).
+
+Both files are encoded for X uploads: H.264 High@4.2, yuv420p, constant frame rate, 2s closed GOPs, AAC-LC stereo, faststart.
 
 ## Structure
 
