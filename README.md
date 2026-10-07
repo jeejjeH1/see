@@ -4,7 +4,9 @@ A 16:9 (1920×1080, 60 fps, H.264 + AAC stereo) motion graphic for an X/Twitter 
 
 **Final video:** [`out/seismic-ecosystem.mp4`](out/seismic-ecosystem.mp4) (1080p60). Fallback: [`out/seismic-ecosystem-30fps.mp4`](out/seismic-ecosystem-30fps.mp4).
 
-Both files are encoded for X uploads: H.264 High@4.2, yuv420p, constant frame rate, 2s closed GOPs, AAC-LC stereo, faststart.
+Lighter copies for slow or unstable connections: [`out/seismic-ecosystem-small.mp4`](out/seismic-ecosystem-small.mp4) (1080p30, 5.6 MB) and [`out/seismic-ecosystem-720p.mp4`](out/seismic-ecosystem-720p.mp4) (720p30, 3.6 MB).
+
+All files are encoded for X uploads: H.264 High@4.2, yuv420p, constant frame rate, 2s closed GOPs, AAC-LC stereo, faststart.
 
 ## Structure
 
